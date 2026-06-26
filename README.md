@@ -387,7 +387,7 @@ Please open an issue first for major changes.
 
 ```bash
 git clone https://github.com/alkaserGG/Alkaser-Recon-Pipeline.git
-cd alkaser
+cd Alkaser-Recon-Pipeline
 git checkout -b feature/my-improvement
 ```
 
