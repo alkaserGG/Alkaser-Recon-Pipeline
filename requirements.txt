@@ -1,0 +1,8 @@
+# ─── Python runtime dependencies for ALKASER ────────────────────────────────
+# Install with:  pip install -r requirements.txt
+
+# Beautiful terminal output
+rich>=13.7.0
+
+# HTTP notifications (Discord / Telegram webhooks)
+requests>=2.31.0
