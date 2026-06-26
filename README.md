@@ -3,6 +3,9 @@
 > A fully-automated, cross-platform Bug Bounty reconnaissance and exploitation pipeline built in Python 3.  
 > Chains **subfinder → httpx → ffuf → katana → waybackurls → uro → gf → nuclei → sqlmap → XSStrike** and consolidates every finding into a clean Markdown report with optional Discord / Telegram alerting.
 
+![GitHub stars](https://img.shields.io/github/stars/alkaserGG/Alkaser-Recon-Pipeline)
+![GitHub license](https://img.shields.io/github/license/alkaserGG/Alkaser-Recon-Pipeline)
+![Python version](https://img.shields.io/badge/python-3.8+-blue)
 
      █████╗ ██╗     ██╗  ██╗ █████╗ ███████╗███████╗██████╗ 
     ██╔══██╗██║     ██║ ██╔╝██╔══██╗██╔════╝██╔════╝██╔══██╗
