@@ -133,7 +133,7 @@ sudo apt update && sudo apt install -y python3 python3-pip git
 #### 2 — Python dependencies
 
 ```bash
-git clone https://github.com/your-handle/alkaser.git
+git clone https://github.com/alkaserGG/Alkaser-Recon-Pipeline.git
 cd alkaser
 pip3 install -r requirements.txt
 ```
