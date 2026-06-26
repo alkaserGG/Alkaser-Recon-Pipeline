@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+.env
+venv/
+results/
