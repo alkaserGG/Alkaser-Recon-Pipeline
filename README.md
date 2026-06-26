@@ -375,7 +375,7 @@ This tool is designed for:
 
 ## 📄 License
 
-MIT © 2025 — Abdo Alkaser  
+MIT © 2026 — Abdo Alkaser  
 See [LICENSE](LICENSE) for full terms.
 
 ---
