@@ -393,7 +393,7 @@ Pull requests and issue reports are welcome.
 Please open an issue first for major changes.
 
 ```bash
-git clone https://github.com/your-handle/alkaser.git
+git clone https://github.com/alkaserGG/Alkaser-Recon-Pipeline.git
 cd alkaser
 git checkout -b feature/my-improvement
 ```
