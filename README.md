@@ -382,7 +382,7 @@ This tool is designed for:
 
 ## 📄 License
 
-MIT © 2025 — Your Name  
+MIT © 2025 — Abdo Alkaser  
 See [LICENSE](LICENSE) for full terms.
 
 ---
