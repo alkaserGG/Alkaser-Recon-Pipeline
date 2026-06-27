@@ -512,7 +512,7 @@ class Pipeline:
     def step_nuclei(self) -> None:
         console.print(Panel("[+] Vulnerability scanning with Nuclei", style="step", expand=False))
 
-        alive = self.layout.alive
+        alive = self.layout.uro_out
         if not read_lines(alive):
             console.print("[warn][ ! ] No alive URLs for Nuclei.  Skipping.[/warn]")
             return
@@ -637,15 +637,26 @@ class Pipeline:
             self.step_httpx()
             advance("Alive Filtering")
 
-            self.step_ffuf()
+            try:
+                self.step_ffuf()
+            except KeyboardInterrupt:
+                console.print("\n[warn][ ! ] FFUF aborted by user (Ctrl+C). Skipping to Crawler...[/warn]")
+                self.stats["ffuf_paths"] = "Aborted"
+                pass
             advance("Directory Brute-Force")
 
+
             # Crawl + Nuclei run in parallel
-            self.run_parallel(self.step_crawl, self.step_nuclei)
-            advance("Crawl + Nuclei (parallel)")
+            # Crawl alone first
+            self.step_crawl()
+            advance("Crawling Endpoints")
 
             self.step_filter_params()
             advance("Parameter Filtering")
+
+            # Nuclei scans the cleaned deduplicated URLs!
+            self.step_nuclei()
+            advance("Nuclei Deep Scan")
 
             self.step_sqlmap()
             advance("SQLi Exploitation")
@@ -790,6 +801,8 @@ def _default_wordlist() -> Optional[str]:
     for p in candidates:
         if Path(p).exists():
             return p
+            
+    console.print("[warn][ ! ] Wordlist not found in OS. FFUF stage will be skipped.[/warn]")
     return None
 
 
@@ -827,12 +840,12 @@ def build_parser() -> argparse.ArgumentParser:
     notify.add_argument("--telegram-token",  default=None,   help="Telegram bot token",  dest="telegram_token")
     notify.add_argument("--telegram-chat",   default=None,   help="Telegram chat ID",    dest="telegram_chat")
  
-    # Control flags
+# Control flags
     ctrl = parser.add_argument_group("control flags")
     ctrl.add_argument("--skip-missing",  action="store_true", help="Continue even if some tools are missing")
     ctrl.add_argument("--skip-exploit",  action="store_true", help="Skip sqlmap and XSStrike stages")
+    ctrl.add_argument("--skip-fuzz",     action="store_true", help="Skip FFUF Directory Brute-force stage")
     ctrl.add_argument("--xss-limit",     type=int, default=20, help="Max XSS URLs to pass to XSStrike (default: 20)")
-    ctrl.add_argument("--no-notify",     action="store_true", help="Suppress all webhook notifications")
  
     # Probing options (httpx)  ← كانت خارج الدالة، الآن داخلها قبل return
     probe = parser.add_argument_group("probing options")
@@ -873,7 +886,11 @@ def main() -> None:
         # Override exploit steps with no-ops
         pipeline.step_sqlmap   = lambda: None  # type: ignore[method-assign]
         pipeline.step_xsstrike = lambda: None  # type: ignore[method-assign]
- 
+
+    if args.skip_fuzz:
+        pipeline.step_ffuf = lambda: None  # type: ignore[method-assign]
+        pipeline.stats["ffuf_paths"] = "Skipped"
+
     pipeline.run()
  
     # Report
