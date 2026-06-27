@@ -637,16 +637,15 @@ class Pipeline:
             self.step_httpx()
             advance("Alive Filtering")
 
+            # ── تأمين مرحلة الـ Ffuf ضد الفصل ──
             try:
                 self.step_ffuf()
             except KeyboardInterrupt:
-                console.print("\n[warn][ ! ] FFUF aborted by user (Ctrl+C). Skipping to Crawler...[/warn]")
+                console.print("\n[warn][ ! ] FFUF stage aborted by user (Ctrl+C). Jumping to Crawler...[/warn]")
                 self.stats["ffuf_paths"] = "Aborted"
                 pass
             advance("Directory Brute-Force")
 
-
-            # Crawl + Nuclei run in parallel
             # Crawl alone first
             self.step_crawl()
             advance("Crawling Endpoints")
@@ -663,7 +662,7 @@ class Pipeline:
 
             self.step_xsstrike()
             advance("XSS Exploitation")
-
+            
         elapsed = time.time() - start
         self.stats["elapsed"] = f"{elapsed:.1f}s"
 
