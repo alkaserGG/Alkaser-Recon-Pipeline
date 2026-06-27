@@ -275,7 +275,12 @@ python3 main.py -d target.com -w /usr/share/seclists/Discovery/Web-Content/raft-
 ```bash
 python3 main.py -d target.com --skip-exploit
 ```
+### Skip Directory Brute-Force (Fast Mode)
 
+```bash
+python3 main.py -d target.com --skip-fuzz
+
+````
 ### With Discord notification
 
 ```bash
@@ -328,8 +333,9 @@ notifications:
   --telegram-chat CHAT_ID       Telegram chat / channel ID
 
 control flags:
-  --skip-missing                Continue even if some tools are absent
+ --skip-missing                Continue even if some tools are absent
   --skip-exploit                Skip sqlmap + XSStrike stages
+  --skip-fuzz                   Skip FFUF Directory Brute-force stage
   --xss-limit N                 Max URLs sent to XSStrike (default: 20)
   --no-notify                   Suppress all webhook notifications
 ```
