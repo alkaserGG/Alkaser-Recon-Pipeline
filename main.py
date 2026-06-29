@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json                          
-import os
 import platform
 import shutil
 import subprocess
@@ -161,19 +160,19 @@ class OutputLayout:
         self.crawl  = self.root / "crawl"
         self.exploit= self.root / "exploit"
 
-        self.subdomains    = self.recon / "subdomains.txt"
-        self.alive         = self.recon / "alive.txt"
-        self.ffuf_dir      = self.recon / "ffuf"
-        self.katana_out    = self.crawl / "katana.txt"
-        self.wayback_out   = self.crawl / "wayback.txt"
-        self.all_urls      = self.crawl / "all_urls.txt"
-        self.uro_out       = self.crawl / "uro_deduped.txt"
-        self.sqli_urls     = self.crawl / "sqli_urls.txt"
-        self.xss_urls      = self.crawl / "xss_urls.txt"
-        self.nuclei_out    = self.vulns / "nuclei.txt"
-        self.sqlmap_out    = self.exploit / "sqlmap"
-        self.xsstrike_out  = self.exploit / "xsstrike.txt"
-        self.report        = self.root / "report.md"
+        self.subdomains        = self.recon / "subdomains.txt"
+        self.alive             = self.recon / "alive.txt"
+        self.ffuf_dir          = self.recon / "ffuf"
+        self.katana_out        = self.crawl / "katana.txt"
+        self.wayback_out       = self.crawl / "wayback.txt"
+        self.all_urls          = self.crawl / "all_urls.txt"
+        self.uro_out           = self.crawl / "uro_deduped.txt"
+        self.sqli_urls         = self.crawl / "sqli_urls.txt"
+        self.xss_urls          = self.crawl / "xss_urls.txt"
+        self.nuclei_out        = self.vulns / "nuclei.txt"
+        self.sqlmap_out        = self.exploit / "sqlmap"
+        self.xsstrike_out      = self.exploit / "xsstrike.txt"
+        self.report            = self.root / "report.md"
 
     def create(self) -> None:
         for d in [
@@ -249,7 +248,6 @@ class Pipeline:
         self._current_task = None
 
     def _advance_stage(self, label: str) -> None:
-        """Helper method to clean up progress reporting style."""
         if self._current_progress and self._current_task is not None:
             self._current_progress.advance(self._current_task)
         console.print(f"[step][ ★ ] Stage complete: {label}[/step]")
@@ -278,7 +276,7 @@ class Pipeline:
             httpx_bin, "-list", str(self.layout.subdomains), "-silent",
             "-threads", str(self.args.threads), "-rl", str(self.args.rate_limit),
             "-timeout", str(self.args.timeout), "-ports", self.args.ports,
-            "-random-agent", "-stats", "-o", str(self.layout.alive),
+            "-random-agent", "-o", str(self.layout.alive),
         ]
         run_cmd(cmd, label="httpx")
         count = len(read_lines(self.layout.alive))
@@ -286,7 +284,6 @@ class Pipeline:
         console.print(f"[success][ ✔ ] httpx found {count} live hosts.[/success]")
 
     def _run_single_ffuf(self, host: str, url: str, wordlist: str, lock: threading.Lock, state: dict) -> None:
-        """Worker function for running FFUF in parallel with localized thread states."""
         out = self.layout.ffuf_dir / f"{host}.json"
         cmd = [
             "ffuf", "-u", f"{url.rstrip('/')}/FUZZ", "-w", wordlist,
@@ -312,34 +309,50 @@ class Pipeline:
 
     def step_ffuf(self) -> None:
         if self.args.skip_fuzz:
-            self.stats["ffuf_paths"] = "Skipped"
+            self.stats["ffuf_paths"] = "Skipped (--skip-fuzz)"
             return
 
         console.print(Panel("[+] Directory brute-forcing with ffuf (Parallel)", style="step", expand=False))
         alive_urls = read_lines(self.layout.alive)
+
         if not alive_urls:
             console.print("[warn][ ! ] No alive URLs. Skipping ffuf.[/warn]")
-            self.stats["ffuf_paths"] = "Skipped/No alive hosts"  
+            self.stats["ffuf_paths"] = "Skipped/No alive hosts"
+            return
+
+        if not self.args.force_fuzz and len(alive_urls) > self.args.fuzz_threshold:
+            console.print(
+                f"[warn][ ! ] {len(alive_urls)} alive hosts found — "
+                f"exceeds threshold ({self.args.fuzz_threshold}). "
+                f"Auto-skipping ffuf to save time. "
+                f"Use --force-fuzz to override.[/warn]"
+            )
+            self.stats["ffuf_paths"] = (
+                f"Auto-skipped ({len(alive_urls)} hosts > threshold {self.args.fuzz_threshold})"
+            )
             return
 
         wordlist = self.args.wordlist or _default_wordlist()
         if not wordlist or not Path(wordlist).exists():
             console.print("[warn][ ! ] No wordlist found for ffuf. Skipping stage.[/warn]")
-            self.stats["ffuf_paths"] = "Skipped/No wordlist"    
+            self.stats["ffuf_paths"] = "Skipped/No wordlist"
             return
 
-        unique_targets = {}
+        unique_targets: dict[str, str] = {}
         for url in alive_urls:
             host = urlparse(url).netloc or url
             if host not in unique_targets:
                 unique_targets[host] = url
 
-        # 🛠️ نقل متغبرات الـ State داخل السكوب المحلي (step_ffuf) لمنع أي تراكم غير مقصود
-        ffuf_lock = threading.Lock()
+        ffuf_lock  = threading.Lock()
         ffuf_state = {"urls": [], "total_findings": 0}
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(self._run_single_ffuf, host, url, wordlist, ffuf_lock, ffuf_state) for host, url in unique_targets.items()]
+        workers = min(4, len(unique_targets))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(self._run_single_ffuf, host, url, wordlist, ffuf_lock, ffuf_state)
+                for host, url in unique_targets.items()
+            ]
             for fut in as_completed(futures):
                 pass
 
@@ -354,18 +367,17 @@ class Pipeline:
         run_cmd(cmd, label="katana")
 
     def _fetch_single_wayback(self, sub: str) -> list[str]:
-        """Helper to run waybackurls safely with optimized memory streaming."""
-        urls = []
+        """Helper to run waybackurls securely without any blocking hazards using atomic process tracking."""
         cmd = ["waybackurls", sub]
         try:
-            with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="ignore") as proc:
-                if proc.stdout:
-                    for line in proc.stdout:
-                        if line.strip():
-                            urls.append(line.strip())
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="ignore", timeout=120)
+            if res.stdout:
+                return [line.strip() for line in res.stdout.splitlines() if line.strip()]
+        except subprocess.TimeoutExpired:
+            console.print(f"[warn]  [ ! ] waybackurls timed out (120s limit) for subdomain: {sub}[/warn]")
         except Exception:
             pass
-        return urls
+        return []
 
     def _run_waybackurls(self) -> None:
         console.print("[info]  [→] Waybackurls starting …[/info]")
@@ -420,7 +432,7 @@ class Pipeline:
         uro_input = "\n".join(all_urls)
         result = run_cmd(["uro"], stdin_data=uro_input, capture=True, label="uro")
         
-        if not result.stdout and result.returncode != 0:
+        if result.returncode != 0:
             console.print("[warn][ ! ] uro tool failed during filtering process. Falling back to un-deduplicated URL mapping.[/warn]")
             deduped = uro_input
         else:
@@ -464,17 +476,60 @@ class Pipeline:
         console.print(f"[success][ ✔ ] gf: {len(unique_sqli)} SQLi candidates, {len(unique_xss)} XSS candidates.[/success]")
 
     def step_nuclei(self) -> None:
-        console.print(Panel("[+] Vulnerability scanning with Nuclei", style="step", expand=False))
-        alive = self.layout.uro_out
-        if not read_lines(alive):
-            console.print("[warn][ ! ] No alive URLs for Nuclei. Skipping.[/warn]")
+        console.print(Panel("[+] Vulnerability scanning with Nuclei (from HTTPX)", style="step", expand=False))
+
+        alive_hosts = read_lines(self.layout.alive)
+        if not alive_hosts:
+            console.print("[warn][ ! ] No alive hosts for Nuclei. Skipping.[/warn]")
+            self.stats["nuclei_findings"] = 0
             return
 
-        cmd = ["nuclei", "-l", str(alive), "-severity", "critical,high", "-c", "50", "-rl", "150", "-stats", "-o", str(self.layout.nuclei_out)]
-        run_cmd(cmd, label="nuclei")
+        limit = self.args.nuclei_limit
+
+        if len(alive_hosts) > limit:
+            console.print(
+                f"[warn][ ! ] {len(alive_hosts)} alive hosts found — "
+                f"limiting Nuclei to first {limit}. "
+                f"Use --nuclei-limit to adjust.[/warn]"
+            )
+            nuclei_input = self.layout.recon / "nuclei_input.txt"
+            nuclei_input.write_text("\n".join(alive_hosts[:limit]), encoding="utf-8")
+            scan_file  = nuclei_input
+            host_count = limit
+        else:
+            scan_file  = self.layout.alive
+            host_count = len(alive_hosts)
+
+        concurrency = min(30, max(10, host_count))
+        rate_limit  = min(300, max(self.args.rate_limit, concurrency * 5))
+
+        console.print(
+            f"[info] [→] Scanning {host_count} hosts | "
+            f"-c {concurrency} | -rl {rate_limit} req/s[/info]"
+        )
+
+        result = run_cmd([
+            "nuclei",
+            "-l",        str(scan_file),
+            "-severity", "critical,high,medium",
+            "-c",        str(concurrency),
+            "-rl",       str(rate_limit),
+            "-timeout",  "10",
+            "-retries",  "1",
+            "-silent",
+            "-o",        str(self.layout.nuclei_out),
+        ], label="nuclei")
+
+        if result.returncode not in (0, 1):
+            stderr_preview = (result.stderr or "")[:300].strip()
+            console.print(
+                f"[error][ ✘ ] Nuclei exited with code {result.returncode}.[/error]\n"
+                f"[dim]   stderr: {stderr_preview or 'none'}[/dim]"
+            )
+
         count = len(read_lines(self.layout.nuclei_out))
         self.stats["nuclei_findings"] = count
-        console.print(f"[success][ ✔ ] Nuclei: {count} findings.[/success]")
+        console.print(f"[success][ ✔ ] Nuclei complete. {count} finding(s).[/success]")
 
     def step_sqlmap(self) -> None:
         if self.args.skip_exploit:
@@ -491,7 +546,7 @@ class Pipeline:
         output_dir = self.layout.sqlmap_out
         cmd = [
             "sqlmap", "-m", str(self.layout.sqli_urls), "--batch", "--random-agent",
-            "--level=1", "--risk=1", "--threads=10", "--smart", "--technique=BEU",
+            "--level=1", "--risk=1", "--threads=10", "--smart", "--technique=BEUST",
             "--timeout=5", "--retries=1", "--output-dir", str(output_dir),
         ]
         run_cmd(cmd, label="sqlmap")
@@ -512,14 +567,15 @@ class Pipeline:
             return
 
         results: list[str] = []
-        xss_bin = "xsstrike" if shutil.which("xsstrike") else "XSStrike"
+        # 🛠️ تصحيح منطق الـ fallback للـ binary الخاص بـ XSStrike لضمان التوافق المطلق مع جميع التوزيعات
+        xss_bin = shutil.which("xsstrike") or shutil.which("XSStrike") or "xsstrike"
 
         for url in xss_urls[:self.args.xss_limit]:
             cmd = [xss_bin, "-u", url, "--skip", "-t", "10", "--file-log-level", "CRITICAL"]
             res = run_cmd(cmd, capture=True, label="xsstrike")
             
             out_str = (res.stdout or "") + "\n" + (res.stderr or "")
-            if "VULNERABLE" in out_str or "Payload:" in out_str:
+            if "XSS Found" in out_str or "Payload:" in out_str or "[+]" in out_str:
                 results.append(f"[VULNERABLE] {url}\n{out_str}\n{'─'*60}\n")
 
         self.layout.xsstrike_out.write_text("\n".join(results), encoding="utf-8")
@@ -576,7 +632,7 @@ class Pipeline:
 def generate_report(target: str, layout: OutputLayout, stats: dict, args: argparse.Namespace) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def _section(title: str, path: Path, max_lines: int = 50) -> str:
+    def _section(title: str, path: Path, max_lines: int = 150) -> str:
         lines = read_lines(path)
         if not lines:
             return f"## {title}\n\n_No results._\n\n"
@@ -589,6 +645,13 @@ def generate_report(target: str, layout: OutputLayout, stats: dict, args: argpar
     md += f"**Date:** {now}  \n"
     md += f"**Total time:** {stats.get('elapsed', '—')}  \n\n"
     md += "---\n\n"
+    
+    # 🛠️ إدراج الأرجومنتس النشطة والـ Flags المفعلة داخل التقرير كـ Best Practice للتوثيق
+    md += "## 🔧 Scan Context & Flags\n\n"
+    md += f"• **Fuzz Threshold:** `{args.fuzz_threshold}` | **Force Fuzz:** `{args.force_fuzz}`  \n"
+    md += f"• **Nuclei Limit:** `{args.nuclei_limit}` | **Rate Limit Baseline:** `{args.rate_limit}` req/s  \n\n"
+    md += "---\n\n"
+
     md += "## 📊 Summary\n\n"
     md += "| Stage | Count |\n|---|---|\n"
     md += f"| Subdomains discovered | {stats.get('subdomains', '—')} |\n"
@@ -608,7 +671,7 @@ def generate_report(target: str, layout: OutputLayout, stats: dict, args: argpar
     md += _section("Crawled URLs (sample)", layout.all_urls)
     md += _section("SQLi Candidate URLs", layout.sqli_urls)
     md += _section("XSS Candidate URLs", layout.xss_urls)
-    md += _section("Nuclei Findings", layout.nuclei_out)
+    md += _section("Nuclei Findings", layout.nuclei_out) 
     md += _section("XSStrike Findings", layout.xsstrike_out)
     md += "---\n\n"
     md += "_Generated by [ALKASER-GG](https://github.com/your-handle/alkaser)_\n"
@@ -710,6 +773,11 @@ def build_parser() -> argparse.ArgumentParser:
     ctrl.add_argument("--skip-exploit",  action="store_true", help="Skip sqlmap and XSStrike stages")
     ctrl.add_argument("--skip-fuzz",     action="store_true", help="Skip FFUF Directory Brute-force stage")
     ctrl.add_argument("--xss-limit",     type=int, default=20, help="Max XSS URLs to pass to XSStrike (default: 20)")
+    
+    # 1. إضافة الـ CLI Arguments الجديدة للتحكم بالـ Threshold والـ Limits بالكامل
+    ctrl.add_argument("--fuzz-threshold", type=int, default=20, help="Auto-skip ffuf if alive hosts exceed this number (default: 20)")
+    ctrl.add_argument("--force-fuzz",     action="store_true", help="Force ffuf even if alive hosts exceed --fuzz-threshold")
+    ctrl.add_argument("--nuclei-limit",   type=int, default=75, help="Max hosts to pass to Nuclei (default: 75)")
  
     probe = parser.add_argument_group("probing options")
     probe.add_argument("--threads",    type=int, default=30,       help="Number of threads for httpx (default: 30)")
