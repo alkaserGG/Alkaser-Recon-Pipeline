@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║        ALKASER-GG — Bug Bounty Recon & Exploitation Pipeline  ║
-║               github.com/your-handle/alkaser                  ║
+║        ALKASER-GG — Bug Bounty Recon & Exploitation Pipeline   ║
+║                github.com/your-handle/alkaser                 ║
 ╚═══════════════════════════════════════════════════════════════╝
 
 A fully-automated, cross-platform Bug Bounty reconnaissance and
-exploitation pipeline.  Chains subfinder → httpx → ffuf → katana
+exploitation pipeline. Chains subfinder → httpx → ffuf → katana
 → waybackurls → uro → gf → nuclei → sqlmap → XSStrike and
 consolidates every finding into a Markdown report.
 
@@ -84,7 +84,7 @@ BANNER = r"""
     ██║  ██║███████╗██║  ██╗██║  ██║███████║███████╗██║  ██║
     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝[/bold red]
 [bold white]           [ Autonomous Recon & Exploitation Pipeline ][/bold white]
-[bold red]                 << GG : SECURITY GAME OVER >>[/bold red]
+[bold red]               << GG : SECURITY GAME OVER >>[/bold red]
 """
 
 def print_banner() -> None:
@@ -153,8 +153,10 @@ def check_dependencies(skip_missing: bool = False) -> bool:
 
 class OutputLayout:
     def __init__(self, target: str, base: str = "results") -> None:
+        # استبدال أي محارف غير صالحة في اسم المجلد لو تم إدخال URL كامل
+        safe_dir_name = target.replace("://", "_").replace("/", "_").replace(":", "_")
         self.target = target
-        self.root   = Path(base) / target
+        self.root   = Path(base) / safe_dir_name
         self.recon  = self.root / "recon"
         self.vulns  = self.root / "vulns"
         self.crawl  = self.root / "crawl"
@@ -239,8 +241,9 @@ def read_lines(path: Path) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Pipeline:
-    def __init__(self, target: str, layout: OutputLayout, args: argparse.Namespace) -> None:
-        self.target = target
+    def __init__(self, target: str, domain: str, layout: OutputLayout, args: argparse.Namespace) -> None:
+        self.target = target  # الـ URL الكامل أو الهدف الممرر يدوياً
+        self.domain = domain  # الدومين الصافي المستخرج للـ Subfinder
         self.layout = layout
         self.args   = args
         self.stats: dict[str, int | str] = {}
@@ -253,19 +256,23 @@ class Pipeline:
         console.print(f"[step][ ★ ] Stage complete: {label}[/step]")
 
     def step_subfinder(self) -> None:
-        console.print(Panel(f"[+] Running Subfinder on [bold]{self.target}[/bold]", style="step", expand=False))
-        cmd = ["subfinder", "-d", self.target, "-silent", "-o", str(self.layout.subdomains)]
+        console.print(Panel(f"[+] Running Subfinder on Domain: [bold]{self.domain}[/bold]", style="step", expand=False))
+        cmd = ["subfinder", "-d", self.domain, "-silent", "-o", str(self.layout.subdomains)]
         run_cmd(cmd, label="subfinder")
         count = len(read_lines(self.layout.subdomains))
         self.stats["subdomains"] = count
         console.print(f"[success][ ✔ ] Subfinder found {count} subdomains.[/success]")
 
     def step_httpx(self) -> None:
-        console.print(Panel("[+] Filtering alive hosts with httpx", style="step", expand=False))
+        console.print(Panel("[+] Filtering alive hosts and target mapping with httpx", style="step", expand=False))
         subdomains = read_lines(self.layout.subdomains)
-        if not subdomains:
-            console.print("[warn][ ! ] No subdomains to probe. Skipping httpx.[/warn]")
-            return
+        
+        # حتى لو لم يجد ساب-دومينز، نضمن إدخال التارجت الأصلي للفحص ولا يتم عمل سكيف
+        httpx_input_lines = set(subdomains)
+        httpx_input_lines.add(self.target)
+        
+        tmp_input = self.layout.recon / "tmp_httpx_in.txt"
+        tmp_input.write_text("\n".join(httpx_input_lines), encoding="utf-8")
 
         httpx_bin = shutil.which("httpx")
         if not httpx_bin:
@@ -273,15 +280,22 @@ class Pipeline:
             return
 
         cmd = [
-            httpx_bin, "-list", str(self.layout.subdomains), "-silent",
+            httpx_bin, "-list", str(tmp_input), "-silent",
             "-threads", str(self.args.threads), "-rl", str(self.args.rate_limit),
             "-timeout", str(self.args.timeout), "-ports", self.args.ports,
             "-random-agent", "-o", str(self.layout.alive),
         ]
         run_cmd(cmd, label="httpx")
-        count = len(read_lines(self.layout.alive))
+        
+        # التأكد التام من أن الرابط المستهدف تم اعتباره نشطاً وإضافته يدوياً لو لم يلقطه الفحص الآلي للمنافذ
+        alive_hosts = read_lines(self.layout.alive)
+        if self.target.startswith("http") and self.target not in alive_hosts:
+            alive_hosts.append(self.target)
+            self.layout.alive.write_text("\n".join(alive_hosts), encoding="utf-8")
+
+        count = len(alive_hosts)
         self.stats["alive"] = count
-        console.print(f"[success][ ✔ ] httpx found {count} live hosts.[/success]")
+        console.print(f"[success][ ✔ ] httpx mapped {count} active pipeline entrypoints.[/success]")
 
     def _run_single_ffuf(self, host: str, url: str, wordlist: str, lock: threading.Lock, state: dict) -> None:
         out = self.layout.ffuf_dir / f"{host}.json"
@@ -340,9 +354,9 @@ class Pipeline:
 
         unique_targets: dict[str, str] = {}
         for url in alive_urls:
+            # لو المدخل يحتوي مسار كامل، نعتمد الرابط بالكامل كـ Target لـ FFUF لكي يفحصه مباشرة وميعملش سكيب
             host = urlparse(url).netloc or url
-            if host not in unique_targets:
-                unique_targets[host] = url
+            unique_targets[host] = url
 
         ffuf_lock  = threading.Lock()
         ffuf_state = {"urls": [], "total_findings": 0}
@@ -367,38 +381,42 @@ class Pipeline:
         run_cmd(cmd, label="katana")
 
     def _fetch_single_wayback(self, sub: str) -> list[str]:
-        """Helper to run waybackurls securely without any blocking hazards using atomic process tracking."""
         cmd = ["waybackurls", sub]
         try:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="ignore", timeout=120)
             if res.stdout:
                 return [line.strip() for line in res.stdout.splitlines() if line.strip()]
         except subprocess.TimeoutExpired:
-            console.print(f"[warn]  [ ! ] waybackurls timed out (120s limit) for subdomain: {sub}[/warn]")
+            console.print(f"[warn]  [ ! ] waybackurls timed out (120s limit) for: {sub}[/warn]")
         except Exception:
             pass
         return []
 
     def _run_waybackurls(self) -> None:
         console.print("[info]  [→] Waybackurls starting …[/info]")
-        subdomains = sorted(list(set(read_lines(self.layout.subdomains))))
-        urls: list[str] = []
+        subdomains = read_lines(self.layout.subdomains)
         
+        # جعل المدخلات تشمل الدومين الصافي أو الرابط المباشر لضمان شمولية البحث الزمني
+        crawl_inputs = set(subdomains)
+        crawl_inputs.add(self.domain)
+        crawl_inputs.add(self.target)
+        
+        urls: list[str] = []
         with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(self._fetch_single_wayback, sub): sub for sub in subdomains}
+            futures = {executor.submit(self._fetch_single_wayback, inp): inp for inp in crawl_inputs if inp.strip()}
             for fut in as_completed(futures):
                 try:
                     urls.extend(fut.result())
                 except Exception as exc:
-                    sub = futures[fut]
-                    console.print(f"[warn]  [ ! ] Waybackurls failed for {sub}: {exc}[/warn]")
+                    inp = futures[fut]
+                    console.print(f"[warn]  [ ! ] Waybackurls failed for {inp}: {exc}[/warn]")
 
         self.layout.wayback_out.write_text("\n".join(u for u in urls if u.strip()), encoding="utf-8")
 
     def step_crawl(self) -> None:
         console.print(Panel("[+] Crawling endpoints (Katana + Waybackurls)", style="step", expand=False))
         if not read_lines(self.layout.alive):
-            console.print("[warn][ ! ] No alive URLs. Skipping crawl.[/warn]")
+            console.print("[warn][ ! ] No active entrypoints to crawl. Skipping crawl.[/warn]")
             return
 
         with ThreadPoolExecutor(max_workers=2) as ex:
@@ -417,6 +435,10 @@ class Pipeline:
         all_urls: set[str] = set()
         for src in [self.layout.katana_out, self.layout.wayback_out, self.layout.recon / "ffuf_urls.txt"]:
             all_urls.update(read_lines(src))
+
+        # في حالة لم يجد الزاحف روابط، نضع التارجت المباشر نفسه في القائمة لكي لا يقف خط الإنتاج
+        if self.target.startswith("http"):
+            all_urls.add(self.target)
 
         self.layout.all_urls.write_text("\n".join(sorted(all_urls)), encoding="utf-8")
         self.stats["crawled_urls"] = len(all_urls)
@@ -447,8 +469,15 @@ class Pipeline:
         gf_sqli = run_cmd(["gf", "sqli"], stdin_data=deduped, capture=True, label="gf:sqli")
         sqli_lines = [l for l in (gf_sqli.stdout or "").splitlines() if l.strip()]
 
+        # تصحيح ذكي: إذا كان الرابط المباشر يحتوي على معاملات (Parameters) بالفعل يدوياً، نضيفه لقائمة الفحص فوراً وميعملش سكيب
+        if "?" in self.target and "=" in self.target:
+            sqli_lines.append(self.target)
+
         gf_xss = run_cmd(["gf", "xss"], stdin_data=deduped, capture=True, label="gf:xss")
         xss_lines = [l for l in (gf_xss.stdout or "").splitlines() if l.strip()]
+        
+        if "?" in self.target and "=" in self.target:
+            xss_lines.append(self.target)
 
         def filter_unique_structures(url_list):
             seen = set()
@@ -476,11 +505,11 @@ class Pipeline:
         console.print(f"[success][ ✔ ] gf: {len(unique_sqli)} SQLi candidates, {len(unique_xss)} XSS candidates.[/success]")
 
     def step_nuclei(self) -> None:
-        console.print(Panel("[+] Vulnerability scanning with Nuclei (from HTTPX)", style="step", expand=False))
+        console.print(Panel("[+] Vulnerability scanning with Nuclei", style="step", expand=False))
 
         alive_hosts = read_lines(self.layout.alive)
         if not alive_hosts:
-            console.print("[warn][ ! ] No alive hosts for Nuclei. Skipping.[/warn]")
+            console.print("[warn][ ! ] No active hosts mapped for Nuclei. Skipping.[/warn]")
             self.stats["nuclei_findings"] = 0
             return
 
@@ -488,7 +517,7 @@ class Pipeline:
 
         if len(alive_hosts) > limit:
             console.print(
-                f"[warn][ ! ] {len(alive_hosts)} alive hosts found — "
+                f"[warn][ ! ] {len(alive_hosts)} targets found — "
                 f"limiting Nuclei to first {limit}. "
                 f"Use --nuclei-limit to adjust.[/warn]"
             )
@@ -504,7 +533,7 @@ class Pipeline:
         rate_limit  = min(300, max(self.args.rate_limit, concurrency * 5))
 
         console.print(
-            f"[info] [→] Scanning {host_count} hosts | "
+            f"[info] [→] Scanning {host_count} endpoints | "
             f"-c {concurrency} | -rl {rate_limit} req/s[/info]"
         )
 
@@ -539,7 +568,7 @@ class Pipeline:
         console.print(Panel("[+] SQLi Exploitation with sqlmap", style="step", expand=False))
         sqli_urls = read_lines(self.layout.sqli_urls)
         if not sqli_urls:
-            console.print("[warn][ ! ] No SQLi candidates. Skipping sqlmap.[/warn]")
+            console.print("[warn][ ! ] No SQLi candidates mapped. Skipping sqlmap.[/warn]")
             self.stats["sqlmap_findings"] = 0
             return
 
@@ -562,12 +591,11 @@ class Pipeline:
         console.print(Panel("[+] XSS Exploitation with XSStrike", style="step", expand=False))
         xss_urls = read_lines(self.layout.xss_urls)
         if not xss_urls:
-            console.print("[warn][ ! ] No XSS candidates. Skipping XSStrike.[/warn]")
+            console.print("[warn][ ! ] No XSS candidates mapped. Skipping XSStrike.[/warn]")
             self.stats["xss_findings"] = 0
             return
 
         results: list[str] = []
-        # 🛠️ تصحيح منطق الـ fallback للـ binary الخاص بـ XSStrike لضمان التوافق المطلق مع جميع التوزيعات
         xss_bin = shutil.which("xsstrike") or shutil.which("XSStrike") or "xsstrike"
 
         for url in xss_urls[:self.args.xss_limit]:
@@ -641,12 +669,11 @@ def generate_report(target: str, layout: OutputLayout, stats: dict, args: argpar
         return f"## {title}\n\n```\n{snippet}{extra}\n```\n\n"
 
     md  = f"# 🦅 ALKASER-GG Bug Bounty Report\n\n"
-    md += f"**Target:** `{target}`  \n"
+    md += f"**Target Link / Domain:** `{target}`  \n"
     md += f"**Date:** {now}  \n"
     md += f"**Total time:** {stats.get('elapsed', '—')}  \n\n"
     md += "---\n\n"
     
-    # 🛠️ إدراج الأرجومنتس النشطة والـ Flags المفعلة داخل التقرير كـ Best Practice للتوثيق
     md += "## 🔧 Scan Context & Flags\n\n"
     md += f"• **Fuzz Threshold:** `{args.fuzz_threshold}` | **Force Fuzz:** `{args.force_fuzz}`  \n"
     md += f"• **Nuclei Limit:** `{args.nuclei_limit}` | **Rate Limit Baseline:** `{args.rate_limit}` req/s  \n\n"
@@ -655,7 +682,7 @@ def generate_report(target: str, layout: OutputLayout, stats: dict, args: argpar
     md += "## 📊 Summary\n\n"
     md += "| Stage | Count |\n|---|---|\n"
     md += f"| Subdomains discovered | {stats.get('subdomains', '—')} |\n"
-    md += f"| Alive hosts           | {stats.get('alive', '—')} |\n"
+    md += f"| Active Entrypoints    | {stats.get('alive', '—')} |\n"
     md += f"| ffuf paths found      | {stats.get('ffuf_paths', '—')} |\n"
     md += f"| Crawled endpoints     | {stats.get('crawled_urls', '—')} |\n"
     md += f"| Unique URLs (uro)     | {stats.get('deduped_urls', '—')} |\n"
@@ -663,11 +690,11 @@ def generate_report(target: str, layout: OutputLayout, stats: dict, args: argpar
     md += f"| XSS candidates        | {stats.get('xss_urls', '—')} |\n"
     md += f"| Nuclei findings       | {stats.get('nuclei_findings', '—')} |\n"
     md += f"| sqlmap findings       | {stats.get('sqlmap_findings', '—')} |\n"
-    md += f"| XSStrike findings     | {stats.get('xss_findings', '—')} |\n\n"
+    md += f"| XSStrike findings      | {stats.get('xss_findings', '—')} |\n\n"
     md += "---\n\n"
 
-    md += _section("Subdomains", layout.subdomains)
-    md += _section("Alive Hosts", layout.alive)
+    md += _section("Subdomains Discovered", layout.subdomains)
+    md += _section("Active Pipeline Targets", layout.alive)
     md += _section("Crawled URLs (sample)", layout.all_urls)
     md += _section("SQLi Candidate URLs", layout.sqli_urls)
     md += _section("XSS Candidate URLs", layout.xss_urls)
@@ -751,21 +778,21 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=textwrap.dedent("""
         Examples
         --------
-          python main.py -d example.com
+          python main.py -d https://example.com/admin/login.php
           python main.py -d example.com -w /usr/share/wordlists/common.txt
           python main.py -d example.com --discord https://discord.com/api/webhooks/...
           python main.py -d example.com --skip-missing --skip-exploit
         """),
     )
  
-    parser.add_argument("-d", "--domain",    required=True,  help="Target domain (e.g. example.com)")
+    parser.add_argument("-d", "--domain",    required=True,  help="Target domain or direct full URL link")
     parser.add_argument("-w", "--wordlist",  default=None,   help="Wordlist for ffuf (auto-detected if omitted)")
     parser.add_argument("-o", "--output",    default="results", help="Base output directory (default: results)")
  
     notify = parser.add_argument_group("notifications")
     notify.add_argument("--discord",         default=None,   help="Discord webhook URL")
     notify.add_argument("--telegram-token",  default=None,   help="Telegram bot token",   dest="telegram_token")
-    notify.add_argument("--telegram-chat",   default=None,   help="Telegram chat ID",     dest="telegram_chat")
+    notify.add_argument("--telegram-chat",   default=None,   help="Telegram chat ID",      dest="telegram_chat")
     notify.add_argument("--no-notify",       action="store_true", help="Disable notifications upon completion")
  
     ctrl = parser.add_argument_group("control flags")
@@ -774,7 +801,6 @@ def build_parser() -> argparse.ArgumentParser:
     ctrl.add_argument("--skip-fuzz",     action="store_true", help="Skip FFUF Directory Brute-force stage")
     ctrl.add_argument("--xss-limit",     type=int, default=20, help="Max XSS URLs to pass to XSStrike (default: 20)")
     
-    # 1. إضافة الـ CLI Arguments الجديدة للتحكم بالـ Threshold والـ Limits بالكامل
     ctrl.add_argument("--fuzz-threshold", type=int, default=20, help="Auto-skip ffuf if alive hosts exceed this number (default: 20)")
     ctrl.add_argument("--force-fuzz",     action="store_true", help="Force ffuf even if alive hosts exceed --fuzz-threshold")
     ctrl.add_argument("--nuclei-limit",   type=int, default=75, help="Max hosts to pass to Nuclei (default: 75)")
@@ -797,21 +823,32 @@ def main() -> None:
     parser = build_parser()
     args   = parser.parse_args()
  
-    target = args.domain.lower().strip()
-    target = target.replace("http://", "").replace("https://", "").split("/")[0]
+    raw_target = args.domain.strip()
     
-    if not target:
-        console.print("[error][ ✘ ] Invalid target domain specified.[/error]")
+    # التحليل الذكي: لو ممرر لينك مباشر، نستخرج منه الدومين الصافي للـ Subfinder ونحتفظ بالـ URL كامل للباقي
+    if "://" in raw_target:
+        parsed_url = urlparse(raw_target)
+        domain = parsed_url.netloc.split(":")[0]  # استخراج الهوست الأساسي بدون البورت
+        target = raw_target
+    else:
+        # لو ممرر دومين عادي بدون بروتوكول
+        domain = raw_target.split("/")[0].split(":")[0]
+        target = f"https://{domain}" if not raw_target.startswith("http") else raw_target
+
+    if not domain:
+        console.print("[error][ ✘ ] Invalid target domain/URL specified.[/error]")
         sys.exit(1)
  
     ok = check_dependencies(skip_missing=args.skip_missing)
     if not ok:
         sys.exit(1)
  
+    # إنشاء اسم مجلد المخرجات بشكل آمن يحافظ على شكل التارجت
     layout = OutputLayout(target=target, base=args.output)
     layout.create()
  
-    pipeline = Pipeline(target=target, layout=layout, args=args)
+    # تمرير المعاملات الجديدة للـ Pipeline لضمان عدم حدوث عمل سكيف للينكات المباشرة
+    pipeline = Pipeline(target=target, domain=domain, layout=layout, args=args)
     pipeline.run()
  
     console.print(Panel("[+] Generating Markdown report …", style="step", expand=False))
@@ -821,7 +858,7 @@ def main() -> None:
     if not args.no_notify:
         send_notifications(target, pipeline.stats, args)
  
-    console.print("\n[bold green]  🦅  ALKASER finished successfully (GG).[/bold green]\n")
+    console.print("\n[bold green]   🦅  ALKASER finished successfully (GG).[/bold green]\n")
  
 if __name__ == "__main__":
     main()
