@@ -301,8 +301,12 @@ class Pipeline:
         out = self.layout.ffuf_dir / f"{host}.json"
         cmd = [
             "ffuf", "-u", f"{url.rstrip('/')}/FUZZ", "-w", wordlist,
-            "-ac", "-t", "20", "-o", str(out), "-of", "json", "-s",
+            "-ac", "-t", str(self.args.ffuf_threads),
+            "-o", str(out), "-of", "json", "-s",
         ]
+        # يضيف ديلاي عشوائي/ثابت بين الطلبات لو المستخدم حدده، لتجنب حظر الـ WAF (Akamai/Cloudflare)
+        if self.args.ffuf_delay:
+            cmd += ["-p", self.args.ffuf_delay]
         run_cmd(cmd, label=f"ffuf:{host}", silent=True)
 
         if out.exists():
@@ -361,7 +365,8 @@ class Pipeline:
         ffuf_lock  = threading.Lock()
         ffuf_state = {"urls": [], "total_findings": 0}
 
-        workers = min(4, len(unique_targets))
+        # عدد الـ workers المتوازية بقى قابل للتحكم عن طريق --ffuf-workers بدل ما يكون ثابت (4)
+        workers = min(self.args.ffuf_workers, len(unique_targets))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
                 executor.submit(self._run_single_ffuf, host, url, wordlist, ffuf_lock, ffuf_state)
@@ -676,7 +681,8 @@ def generate_report(target: str, layout: OutputLayout, stats: dict, args: argpar
     
     md += "## 🔧 Scan Context & Flags\n\n"
     md += f"• **Fuzz Threshold:** `{args.fuzz_threshold}` | **Force Fuzz:** `{args.force_fuzz}`  \n"
-    md += f"• **Nuclei Limit:** `{args.nuclei_limit}` | **Rate Limit Baseline:** `{args.rate_limit}` req/s  \n\n"
+    md += f"• **Nuclei Limit:** `{args.nuclei_limit}` | **Rate Limit Baseline:** `{args.rate_limit}` req/s  \n"
+    md += f"• **FFUF Threads:** `{args.ffuf_threads}` | **FFUF Workers:** `{args.ffuf_workers}` | **FFUF Delay:** `{args.ffuf_delay or 'none'}`  \n\n"
     md += "---\n\n"
 
     md += "## 📊 Summary\n\n"
@@ -782,6 +788,7 @@ def build_parser() -> argparse.ArgumentParser:
           python main.py -d example.com -w /usr/share/wordlists/common.txt
           python main.py -d example.com --discord https://discord.com/api/webhooks/...
           python main.py -d example.com --skip-missing --skip-exploit
+          python main.py -d example.com --ffuf-threads 5 --ffuf-delay "0.3-1.0" --ffuf-workers 2 --rate-limit 10
         """),
     )
  
@@ -810,6 +817,21 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--rate-limit", type=int, default=50,       help="Maximum requests per second (default: 50)")
     probe.add_argument("--timeout",    type=int, default=3,        help="Timeout in seconds for httpx (default: 3)")
     probe.add_argument("--ports",      type=str, default="80,443", help="Ports to scan (default: 80,443)")
+
+    fuzz_rl = parser.add_argument_group("ffuf rate limiting (WAF evasion)")
+    fuzz_rl.add_argument(
+        "--ffuf-threads", type=int, default=20,
+        help="Threads per single ffuf job (default: 20). Lower this (e.g. 5) for WAF-protected targets like Akamai/Cloudflare."
+    )
+    fuzz_rl.add_argument(
+        "--ffuf-delay", type=str, default=None,
+        help='Delay between ffuf requests. Fixed seconds ("0.5") or random range ("0.3-1.0"). '
+             "Disabled by default; set this to avoid tripping WAF rate-limit blocks."
+    )
+    fuzz_rl.add_argument(
+        "--ffuf-workers", type=int, default=4,
+        help="Max number of hosts fuzzed in parallel (default: 4). Lower this to 1-2 to reduce overall request volume."
+    )
  
     return parser
  
