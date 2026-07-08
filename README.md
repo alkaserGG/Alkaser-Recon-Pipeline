@@ -27,6 +27,7 @@
 - [Usage](#-usage)
 - [CLI Reference](#-cli-reference)
 - [Smart Rate Limiting & Auto-Skip Logic](#-smart-rate-limiting--auto-skip-logic)
+- [Avoiding WAF Blocks (Akamai / Cloudflare / etc.)](#-avoiding-waf-blocks-akamai--cloudflare--etc)
 - [Notifications](#-notifications-discord--telegram)
 - [Responsible Disclosure](#-responsible-disclosure)
 - [License](#-license)
@@ -39,12 +40,13 @@
 |---|---|
 | 🔍 Subdomain Enumeration | `subfinder` with passive OSINT sources |
 | 🌐 Alive Filtering | `httpx` — fast, concurrent HTTP probing |
-| 📁 Directory Brute-Force | `ffuf` with smart auto-skip threshold |
+| 📁 Directory Brute-Force | `ffuf` with smart auto-skip threshold + configurable rate limiting |
 | 🕷️ Crawling & Spidering | `katana` + `waybackurls` running in parallel |
 | 🔗 Parameter Deduplication | `uro` removes duplicate endpoints |
 | 🎯 Pattern Filtering | `gf` extracts SQLi and XSS candidate URLs |
 | 💣 Vulnerability Scanning | `nuclei` — feeds directly from `httpx` alive hosts |
 | ⚡ Dynamic Rate Limiting | Nuclei concurrency + rate auto-scales by host count |
+| 🐢 Configurable ffuf Throttling | Tune threads, delay, and parallel workers to stay under WAF thresholds |
 | 🗄️ SQL Injection | `sqlmap` — automated, batch mode, BEUST techniques |
 | ✴️ Cross-Site Scripting | `XSStrike` — crawl + skip interactive mode |
 | 📝 Markdown Report | All findings in one clean `.md` file |
@@ -69,7 +71,9 @@ target.com
     ▼                                                         ▼
 [3] ffuf               → recon/ffuf/        [4a] katana       → crawl/katana.txt
     (auto-skipped if                         [4b] waybackurls → crawl/wayback.txt
-     hosts > threshold)                      (run in parallel)
+     hosts > threshold,                      (run in parallel)
+     throttled via --ffuf-threads/
+     --ffuf-delay/--ffuf-workers)
                                                        │
                                                        ▼
                                              [5] uro + gf
@@ -293,6 +297,12 @@ python3 main.py -d target.com --fuzz-threshold 10
 python3 main.py -d target.com --force-fuzz          # force ffuf regardless
 ```
 
+### Throttle ffuf to avoid WAF blocks (Akamai, Cloudflare, etc.)
+
+```bash
+python3 main.py -d target.com --ffuf-threads 5 --ffuf-delay "0.3-1.0" --ffuf-workers 2
+```
+
 ### Control how many hosts Nuclei scans
 
 ```bash
@@ -337,6 +347,7 @@ usage: alkaser [-h] -d DOMAIN [-w WORDLIST] [-o OUTPUT]
                [--xss-limit N] [--no-notify]
                [--fuzz-threshold N] [--force-fuzz] [--nuclei-limit N]
                [--threads N] [--rate-limit N] [--timeout N] [--ports PORTS]
+               [--ffuf-threads N] [--ffuf-delay RANGE] [--ffuf-workers N]
 
 options:
   -h, --help                    Show help and exit
@@ -368,6 +379,11 @@ probing options:
   --rate-limit N                Max requests/sec for httpx & Nuclei baseline (default: 50)
   --timeout N                   httpx timeout in seconds (default: 3)
   --ports PORTS                 Ports to probe (default: 80,443)
+
+ffuf rate limiting (WAF evasion):
+  --ffuf-threads N               Threads per single ffuf job (default: 20)
+  --ffuf-delay RANGE             Delay between ffuf requests: fixed ("0.5") or random range ("0.3-1.0") (default: none)
+  --ffuf-workers N                Max hosts fuzzed in parallel (default: 4)
 ```
 
 ---
@@ -396,6 +412,41 @@ Nuclei feeds directly from `httpx` alive hosts (not from `uro`) to prevent scann
 | 75 (default limit) | 30 | 300 req/s |
 
 If alive hosts exceed `--nuclei-limit`, only the first N hosts are scanned and a `recon/nuclei_input.txt` is created automatically.
+
+### ffuf Throttling (new)
+
+Unlike Nuclei/httpx, ffuf's per-job concurrency used to be hardcoded (`-t 20`, up to 4 parallel host jobs, no inter-request delay). This is now fully configurable:
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--ffuf-threads` | Threads used by a single ffuf job against one host | `20` |
+| `--ffuf-delay` | Delay between requests within a job — fixed (`"0.5"`) or random range (`"0.3-1.0"`) | `None` (disabled) |
+| `--ffuf-workers` | How many hosts get fuzzed in parallel | `4` |
+
+Lowering all three reduces the effective requests/second hitting a single target — important for WAF-protected sites (see next section).
+
+---
+
+## 🛡 Avoiding WAF Blocks (Akamai / Cloudflare / etc.)
+
+Some targets sit behind aggressive bot-mitigation WAFs (Akamai, Cloudflare, Imperva, etc.) that block an entire IP after detecting a burst of automated requests — not just a single path. If you suddenly get `Access Denied` on the target from your browser too (not just from the tool), your IP was most likely rate-limited or blocked at the edge.
+
+Symptoms:
+- Sudden `403 Access Denied` pages referencing `edgesuite.net` / `edgekey.net` (Akamai), or Cloudflare's "Attention Required" page.
+- The block persists even after stopping the scan and applies to normal browser traffic too.
+
+Mitigation — lower the request rate **before** re-running against the same target:
+
+```bash
+python3 main.py -d target.com \
+  --ffuf-threads 3 --ffuf-delay "0.5-2.0" --ffuf-workers 1 \
+  --rate-limit 10 --nuclei-limit 20
+```
+
+Recommendations:
+- Start conservative on unfamiliar/WAF-protected targets (`--ffuf-threads 3-5`, `--ffuf-delay "0.5-2.0"`, `--ffuf-workers 1-2`).
+- If you already got blocked, wait out the WAF's cooldown window (varies by provider, often minutes to a few hours) or rotate your IP before retrying.
+- If this is an authorized bug bounty target, keep the WAF's block reference ID (e.g. Akamai's `Reference #...`) — programs can usually whitelist your IP once you show proof of authorized testing.
 
 ---
 
