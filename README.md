@@ -415,9 +415,9 @@ Nuclei feeds directly from `httpx` alive hosts (not from `uro`) to prevent scann
 
 | Alive hosts | Concurrency (`-c`) | Rate limit (`-rl`) |
 |---|---|---|
-| 10 | 10 | ~100 req/s |
+| 10 | 10 | ~50 req/s |
 | 30 | 30 | ~150 req/s |
-| 75 (default limit) | 30 | 300 req/s |
+| 75 (default limit) | 30 | ~150 req/s |
 
 If alive hosts exceed `--nuclei-limit`, only the first N hosts are scanned and a `recon/nuclei_input.txt` is created automatically.
 
