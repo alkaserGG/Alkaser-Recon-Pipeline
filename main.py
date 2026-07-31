@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║        ALKASER-GG — Bug Bounty Recon & Exploitation Pipeline   ║
-║                github.com/your-handle/alkaser                 ║
+║        ALKASER-GG — Bug Bounty Recon & Exploitation Pipeline  ║
+║                github.com/alkaserGG/Alkaser-Recon-Pipeline    ║
 ╚═══════════════════════════════════════════════════════════════╝
 
 A fully-automated, cross-platform Bug Bounty reconnaissance and
