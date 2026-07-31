@@ -255,13 +255,45 @@ class Pipeline:
             self._current_progress.advance(self._current_task)
         console.print(f"[step][ ★ ] Stage complete: {label}[/step]")
 
-    def step_subfinder(self) -> None:
-        console.print(Panel(f"[+] Running Subfinder on Domain: [bold]{self.domain}[/bold]", style="step", expand=False))
+   def step_subfinder(self) -> None:
+        console.print(Panel(f"[+] Running Subfinder (Pass 1) on Domain: [bold]{self.domain}[/bold]", style="step", expand=False))
+        
+        # 1. الفحص الأولي للدومين الأساسي
         cmd = ["subfinder", "-d", self.domain, "-silent", "-o", str(self.layout.subdomains)]
-        run_cmd(cmd, label="subfinder")
+        run_cmd(cmd, label="subfinder:pass1")
+        
+        first_pass_subs = set(read_lines(self.layout.subdomains))
+        console.print(f"[info] [→] Pass 1 found {len(first_pass_subs)} subdomains.[/info]")
+
+        # 👈 [هنا التعديل بالظبط]: الشك على الـ Flag والنتائج مع بعض
+        if self.args.recursive_sub and first_pass_subs:
+            console.print("[info] [→] Running Recursive Subfinder Pass (Feeding results back into subfinder)...[/info]")
+            
+            pass2_out = self.layout.recon / "subdomains_pass2.txt"
+            
+            # نمرر ملف النتائج الأولى لـ subfinder باستخدام -dL
+            cmd_pass2 = [
+                "subfinder", "-dL", str(self.layout.subdomains),
+                "-silent", "-o", str(pass2_out)
+            ]
+            run_cmd(cmd_pass2, label="subfinder:pass2")
+            
+            # دمج النتائج الجديدة مع نتائج Pass 1 وتصفية التكرار
+            second_pass_subs = set(read_lines(pass2_out))
+            all_subdomains = sorted(first_pass_subs.union(second_pass_subs))
+            
+            # إعادة حفظ القائمة الشاملة والنظيفة في الملف الرئيسي
+            self.layout.subdomains.write_text("\n".join(all_subdomains), encoding="utf-8")
+            
+            # مسح الملف المؤقت
+            if pass2_out.exists():
+                pass2_out.unlink()
+        elif not self.args.recursive_sub:
+            console.print("[dim] [i] Recursive subfinder pass disabled (use --recursive-sub to enable).[/dim]")
+
         count = len(read_lines(self.layout.subdomains))
         self.stats["subdomains"] = count
-        console.print(f"[success][ ✔ ] Subfinder found {count} subdomains.[/success]")
+        console.print(f"[success][ ✔ ] Subfinder scan complete! Total unique subdomains: {count}[/success]")
 
     def step_httpx(self) -> None:
         console.print(Panel("[+] Filtering alive hosts and target mapping with httpx", style="step", expand=False))
@@ -802,11 +834,12 @@ def build_parser() -> argparse.ArgumentParser:
     notify.add_argument("--telegram-chat",   default=None,   help="Telegram chat ID",      dest="telegram_chat")
     notify.add_argument("--no-notify",       action="store_true", help="Disable notifications upon completion")
  
-    ctrl = parser.add_argument_group("control flags")
+   ctrl = parser.add_argument_group("control flags")
     ctrl.add_argument("--skip-missing",  action="store_true", help="Continue even if some tools are missing")
     ctrl.add_argument("--skip-exploit",  action="store_true", help="Skip sqlmap and XSStrike stages")
     ctrl.add_argument("--skip-fuzz",     action="store_true", help="Skip FFUF Directory Brute-force stage")
     ctrl.add_argument("--xss-limit",     type=int, default=20, help="Max XSS URLs to pass to XSStrike (default: 20)")
+    ctrl.add_argument("--recursive-sub", action="store_true", help="Run a second recursive pass with subfinder using discovered subdomains")
     
     ctrl.add_argument("--fuzz-threshold", type=int, default=20, help="Auto-skip ffuf if alive hosts exceed this number (default: 20)")
     ctrl.add_argument("--force-fuzz",     action="store_true", help="Force ffuf even if alive hosts exceed --fuzz-threshold")
