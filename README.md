@@ -38,7 +38,7 @@
 
 | Feature | Detail |
 |---|---|
-| 🔍 Subdomain Enumeration | `subfinder` with passive OSINT sources |
+| 🔍 Subdomain Enumeration | `subfinder` with passive OSINT sources + optional recursive pass (`--recursive-sub`) |
 | 🌐 Alive Filtering | `httpx` — fast, concurrent HTTP probing |
 | 📁 Directory Brute-Force | `ffuf` with smart auto-skip threshold + configurable rate limiting |
 | 🕷️ Crawling & Spidering | `katana` + `waybackurls` running in parallel |
@@ -62,7 +62,7 @@
 target.com
     │
     ▼
-[1] subfinder          → subdomains.txt
+[1] subfinder          → subdomains.txt (Pass 1 [+ Pass 2 recursive if --recursive-sub])
     │
     ▼
 [2] httpx              → alive.txt          (live hosts only)
@@ -103,7 +103,7 @@ target.com
 results/
 └── target.com/
     ├── recon/
-    │   ├── subdomains.txt        # Raw subfinder output
+    │   ├── subdomains.txt        # Raw subfinder output (or merged pass 1 + pass 2)
     │   ├── alive.txt             # Live URLs from httpx
     │   ├── nuclei_input.txt      # Auto-created if hosts > --nuclei-limit
     │   └── ffuf/                 # One JSON file per host
@@ -271,6 +271,13 @@ pip install -r requirements.txt
 python3 main.py -d target.com
 ```
 
+### Deep recursive subdomain enumeration
+
+```bash
+# Feeds discovered subdomains back into subfinder for a second pass
+python3 main.py -d target.com --recursive-sub
+```
+
 ### With a custom wordlist
 
 ```bash
@@ -344,7 +351,7 @@ usage: alkaser [-h] -d DOMAIN [-w WORDLIST] [-o OUTPUT]
                [--discord DISCORD]
                [--telegram-token TOKEN] [--telegram-chat CHAT_ID]
                [--skip-missing] [--skip-exploit] [--skip-fuzz]
-               [--xss-limit N] [--no-notify]
+               [--xss-limit N] [--recursive-sub] [--no-notify]
                [--fuzz-threshold N] [--force-fuzz] [--nuclei-limit N]
                [--threads N] [--rate-limit N] [--timeout N] [--ports PORTS]
                [--ffuf-threads N] [--ffuf-delay RANGE] [--ffuf-workers N]
@@ -370,6 +377,7 @@ control flags:
   --skip-exploit                Skip sqlmap + XSStrike stages
   --skip-fuzz                   Skip ffuf entirely (manual override)
   --xss-limit N                 Max URLs sent to XSStrike (default: 20)
+  --recursive-sub               Run a second recursive pass with subfinder using discovered subdomains
   --fuzz-threshold N            Auto-skip ffuf if alive hosts exceed N (default: 20)
   --force-fuzz                  Force ffuf even if alive hosts exceed --fuzz-threshold
   --nuclei-limit N              Max hosts passed to Nuclei (default: 75)
