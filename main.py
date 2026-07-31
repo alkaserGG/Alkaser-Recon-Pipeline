@@ -255,7 +255,7 @@ class Pipeline:
             self._current_progress.advance(self._current_task)
         console.print(f"[step][ ★ ] Stage complete: {label}[/step]")
 
-   def step_subfinder(self) -> None:
+    def step_subfinder(self) -> None:
         console.print(Panel(f"[+] Running Subfinder (Pass 1) on Domain: [bold]{self.domain}[/bold]", style="step", expand=False))
         
         # 1. الفحص الأولي للدومين الأساسي
@@ -834,7 +834,7 @@ def build_parser() -> argparse.ArgumentParser:
     notify.add_argument("--telegram-chat",   default=None,   help="Telegram chat ID",      dest="telegram_chat")
     notify.add_argument("--no-notify",       action="store_true", help="Disable notifications upon completion")
  
-   ctrl = parser.add_argument_group("control flags")
+    ctrl = parser.add_argument_group("control flags")
     ctrl.add_argument("--skip-missing",  action="store_true", help="Continue even if some tools are missing")
     ctrl.add_argument("--skip-exploit",  action="store_true", help="Skip sqlmap and XSStrike stages")
     ctrl.add_argument("--skip-fuzz",     action="store_true", help="Skip FFUF Directory Brute-force stage")
